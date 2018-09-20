@@ -1,0 +1,8 @@
+# Editor Configs
+cmake-build-debug
+CMakeLists.txt
+.idea
+
+# Filesystem and Debug Symbols
+.DS_Store
+*.dSYM

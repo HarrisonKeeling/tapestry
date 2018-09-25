@@ -23,26 +23,21 @@ typedef struct {
 void rgb_to_binary(int n, char* binary);
 unsigned int binary_to_rgb(char* binary);
 video_dimension_s *video_dimensions(char* filename);
-void encrypt();
-void decrypt();
+
+void cipher(char* cloak, char* message, void(*operation)(char*, char*), int preserve_color);
+void encrypt(char* message_binary, char* cloak_binary);
+void decrypt(char* message_binary, char* cloak_binary);
+
 void print_help();
 
 int main(int argc, char** argv) {
-    if (argc <= 1) {
+    if (argc < 4) {
         print_help();
         return 1;
     } else if (strcmp(argv[1], "-enc") == 0) {
-        if (argc != 4) {
-            print_help();
-            return 1;
-        }
-        encrypt(argv[2], argv[3]);
+        cipher(argv[2], argv[3], encrypt, 1);
     } else if (strcmp(argv[1], "-dec") == 0) {
-        if (argc != 3) {
-            print_help();
-            return 1;
-        }
-        decrypt(argv[2]);
+        cipher(argv[2], argv[3], decrypt, 0);
     }
     return 0;
 }
@@ -59,12 +54,13 @@ void print_help() {
     printf("\t-enc <cloak path> <message path>\n");
     printf("\t\t\t* Purpose: embed a video with filename `message` into a video with the "
            "filename `cloak`\n");
-    printf("\t\t\t* Example: ./stego -enc cloak.mp4 message.mp4\n");
+    printf("\t\t\t* Example: ./tapestry -enc cloak.mp4 message.mp4\n");
 
     // decrypt
-    printf("\t-dec <cloak path>\n");
-    printf("\t\t\t* Purpose: attempt to pull out a video message from an encrypted video with the filename `secret.mkv`\n");
-    printf("\t\t\t* Example: ./stego -dec secret.mkv\n");
+    printf("\t-dec <encrypted video path> <original cloak path>\n");
+    printf("\t\t\t* Purpose: attempt to pull out a video message from an encrypted video with the filename `secret.mkv` "
+           "by using the original `cloak` file as a decyprtion key\n");
+    printf("\t\t\t* Example: ./tapestry -dec secret.mkv cloak.mp4\n");
 }
 
 /*
@@ -152,10 +148,52 @@ video_dimension_s *video_dimensions(char* filename) {
  * Function:    encrypt
  * Purpose:     embed a video with filename `message` into a video with the filename `cloak`
  *
- * Input:       char* cloak:    a char array containing the name of the file to embed into
- *              char* message:  a char array containing the name of the file to embed
+ * Input:       char* message_binary:   binary of a particular color value (r, g, or b) for a pixel in a frame of
+ *                                      the message file
+ *              char* cloak_binary:     binary of a particular color value (r, g, or b) for a pixel in a frame of
+ *                                      the cloak file
  */
-void encrypt(char* cloak, char* message) {
+void encrypt(char* message_binary, char* cloak_binary) {
+    for (int lsd = 4; lsd < 8; ++lsd) {
+        cloak_binary[lsd] = (char) (((int) (cloak_binary[lsd] - '0') ^ (int) (message_binary[lsd - 4] - '0')) + '0');
+    }
+}
+
+/*
+ * Function:    decrypt
+ * Purpose:     attempt to pull out a video message from an encrypted video and store the results in cloak_binary
+ *
+ * Input:       char* message_binary:   binary of a particular color value (r, g, or b) for a pixel in a frame of
+ *                                      the message file
+ *              char* cloak_binary:     binary of a particular color value (r, g, or b) for a pixel in a frame of
+ *                                      the cloak file
+ */
+void decrypt(char* message_binary, char* cloak_binary) {
+    for (int lsd = 4; lsd < 8; ++lsd) {
+        cloak_binary[lsd] = (char)(((int)(cloak_binary[lsd] - '0') ^ (int)(message_binary[lsd] - '0')) + '0');
+    }
+
+    // store least significant digits from the compiled message in the most significant digits
+    char temp;
+    for (int lsd = 0; lsd < 4; ++lsd) {
+        temp = cloak_binary[lsd];
+        cloak_binary[lsd] = cloak_binary[lsd+4];
+        cloak_binary[lsd+4] = temp;
+    }
+}
+
+/*
+ * Function:    cipher
+ * Purpose:     attempt to pull out a video message from an encrypted video with the filename `secret.mkv`
+ *
+ * Input:       char* cloak:        char array containing the name of the file to embed into
+ *              char* message       char array containing the name of the file to embed
+ *              void operation:     pointer to a method that that takes in both the message_binary and cloak_binary of a
+ *                                  particular color value (r, g, or b) for a pixel in a frame and performs an encryption
+ *                                  or decryption mechanism on it
+ *              int preserve_color: flag which determines whether to output to a format preserving the rgb values
+ */
+void cipher(char* cloak, char* message, void(*operation)(char*, char*), int preserve_color) {
     int x, y, cloak_values, message_values, cloak_offset, message_offset;
     char *cloak_frame, *message_frame;
     char *command;
@@ -194,8 +232,16 @@ void encrypt(char* cloak, char* message) {
     free(command);
 
     // open a write pipe, to store the composite video
-    char *write_pattern = "ffmpeg -y -f rawvideo -vcodec rawvideo -pix_fmt rgb24 -color_range 2 -s %ix%i -i - "
-                          "-map 0:v:0 -pix_fmt bgr24 -c:v libx264rgb -preset veryslow -qp 0 tmp_compiled.mkv";
+    char *write_pattern;
+
+    if (preserve_color) {
+        write_pattern = "ffmpeg -y -f rawvideo -vcodec rawvideo -pix_fmt rgb24 -color_range 2 -s %ix%i -i - "
+                              "-map 0:v:0 -pix_fmt bgr24 -c:v libx264rgb -preset veryslow -qp 0 tmp_compiled.mkv";
+    } else {
+        write_pattern = "ffmpeg -y -f rawvideo -vcodec rawvideo -pix_fmt rgb24 -color_range 2 -s %ix%i -r 25 -i - "
+                        "-map 0:v:0 -vcodec mpeg4 -pix_fmt rgb24 -color_range 2 tmp_compiled.mp4";
+    }
+
     // allocate enough space for the message plus the max size of pixels
     command = malloc(sizeof(char) * strlen(write_pattern) + 11);
     sprintf(command, write_pattern, cloak_dimensions->width, cloak_dimensions->height);
@@ -241,10 +287,7 @@ void encrypt(char* cloak, char* message) {
                         rgb_to_binary(cloak_frame[cloak_offset + color], cloak_binary);
                         rgb_to_binary(message_frame[message_offset + color], message_binary);
 
-                        // store 4 most significant digits from the message in the least significant digits of the cloak
-                        for (int lsd = 4; lsd < 8; ++lsd) {
-                            cloak_binary[lsd] = message_binary[lsd-4];
-                        }
+                        operation(message_binary, cloak_binary);
 
                         // convert the composed binary value back to a [0-255] ranged rgb value
                         cloak_frame[cloak_offset + color] = (char)binary_to_rgb(cloak_binary);
@@ -266,8 +309,13 @@ void encrypt(char* cloak, char* message) {
     pclose(composed_out);
 
     //compose the intertwined video with the original cloak audio
-    system("ffmpeg -y -i tmp_compiled.mkv -i tmp_audio.aac -c copy -map 0:v:0 -map 1:a:0 output.mkv");
-    remove("tmp_compiled.mkv");
+    if (preserve_color) {
+        system("ffmpeg -y -i tmp_compiled.mkv -i tmp_audio.aac -c copy -map 0:v:0 -map 1:a:0 output.mkv");
+        remove("tmp_compiled.mkv");
+    } else {
+        system("ffmpeg -y -i tmp_compiled.mp4 -i tmp_audio.aac -c copy -map 0:v:0 -map 1:a:0 output.mp4");
+        remove("tmp_compiled.mp4");
+    }
     remove("tmp_audio.aac");
 
     // free memory
@@ -277,92 +325,4 @@ void encrypt(char* cloak, char* message) {
     free(message_dimensions);
     free(cloak_frame);
     free(message_frame);
-}
-
-/*
- * Function:    decrypt
- * Purpose:     attempt to pull out a video message from an encrypted video with the filename `secret.mkv`
- *
- * Input:       char* secret:    a char array containing the name of the file containing an encrypted video message
- */
-void decrypt(char *secret) {
-    int x, y, cloak_values, offset;
-    char *command;
-    char *message_binary = malloc(sizeof(char) * 9);
-    message_binary[8] = '\0';
-    char *secret_binary = malloc(sizeof(char) * 9);
-    secret_binary[8] = '\0';
-
-    video_dimension_s *secret_dimensions = video_dimensions(secret);
-
-    // Allocate a buffer to store one secret_frame of rgb values
-    unsigned char *secret_frame = malloc(sizeof(unsigned char) * secret_dimensions->height * secret_dimensions->width * 3);
-
-    // open secret video file in a pipe so we can read in the frame data
-    char* secret_pattern = "ffmpeg -i %s -f image2pipe -vcodec rawvideo -pix_fmt rgb24 -color_range 2 -";
-    // allocate enough space for the command pattern plus the secret filename
-    command = malloc(sizeof(char) * strlen(secret_pattern) + strlen(secret) + 1);
-    sprintf(command, secret_pattern, secret);
-    FILE *secret_in = popen(command, "r");
-    free(command);
-
-    // open a write pipe, to store the composite video
-    char *write_pattern = "ffmpeg -y -f rawvideo -vcodec rawvideo -pix_fmt rgb24 -color_range 2 -s %ix%i -r 25 -i - "
-                          "-map 0:v:0 -vcodec mpeg4 -pix_fmt rgb24 -color_range 2 message.mp4";
-    // allocate enough space for the message plus the max size of pixels
-    command = malloc(sizeof(char) * strlen(write_pattern) + 11);
-    sprintf(command, write_pattern, secret_dimensions->width, secret_dimensions->height);
-    FILE *composed_out = popen(command, "w");
-    free(command);
-
-    // process frames
-    while(1)
-    {
-        // Read a secret_frame from the input pipe into the buffer
-        cloak_values = (int)fread(
-                secret_frame,
-                sizeof(unsigned char),
-                (size_t)secret_dimensions->height * secret_dimensions->width * 3,
-                secret_in
-                );
-
-        // If we didn't get a secret_frame of video, we're probably at the end
-        if (cloak_values != secret_dimensions->height*secret_dimensions->width*3) break;
-
-        // Process the frame of message to embed it
-        for (y = 0; y < secret_dimensions->height; ++y) {
-            for (x = 0; x < secret_dimensions->width; ++x) {
-                offset = (y * secret_dimensions->width * 3) + (x * 3);
-
-                for (int color = 0; color < 3; ++color) {
-                    // get the current [0-255] ranged rgb values in binary
-                    rgb_to_binary(secret_frame[offset + color], secret_binary);
-
-                    // store least significant digits from the compiled message in the most significant digits
-                    for (int lsd = 0; lsd < 4; ++lsd) {
-                        message_binary[lsd] = secret_binary[lsd+4];
-                        message_binary[lsd+4] = secret_binary[lsd];
-                    }
-
-                    // convert the binary back to a [0-255] ranged rgb value
-                    secret_frame[offset + color] = (unsigned char)binary_to_rgb(message_binary);
-                }
-            }
-        }
-
-        // Write this secret_frame to the output pipe
-        fwrite(secret_frame, 1, secret_dimensions->height * secret_dimensions->width * 3, composed_out);
-    }
-
-    // Flush and close input and output pipes
-    fflush(secret_in);
-    pclose(secret_in);
-    fflush(composed_out);
-    pclose(composed_out);
-
-    // free memory
-    free(secret_binary);
-    free(message_binary);
-    free(secret_dimensions);
-    free(secret_frame);
 }

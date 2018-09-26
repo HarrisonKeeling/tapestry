@@ -1,8 +1,21 @@
 # Tapestry
 A command line tool for encrypting/decrypting videos inside other videos.
 
-The current encryption method utilizes a LSD method for proof of concept purposes.  I plan to update this program to
-allow the user to specify an encryption/decryption method from a subset of standard ciphers for more practical use.
+
+![tapestry usage example](doc/media/tapestry.gif)
+
+## Status
+The current encryption method utilizes an XOR method on the message file
+and the cloak file as a one-time-pad type encryption. I plan to update
+this program to allow the user to specify an encryption/decryption method
+from a subset of standard ciphers for more practical use.
+
+Additionally, you'll notice some loss of quality in the encrypted and
+decrypted messages when compared to the originals.  I plan to implement
+and option to store encrypted bits in a 1:2 message:cloak frame format
+which will allow you to preserve the entire quality of the message at
+the limitation of having a cloak file with twice as many frames than
+the message file.
 
 ## Requirements
 Tapestry is written in C and uses [FFmpeg](https://ffmpeg.org/) to encode and decode video files.
@@ -26,10 +39,12 @@ Currently, two operations are provided:
 
     -enc <cloak path> <message path>
         * Purpose: embed a video with filename `message` into a video with the filename `cloak`
-        * Example: ./stego -enc cloak.mp4 message.mp4
-	-dec <cloak path>
+        * Example: ./tapestry -enc cloak.mp4 message.mp4
+	-dec <encrypted video path> <original cloak path>
         * Purpose: attempt to pull out a video message from an encrypted video with the filename `secret.mkv`
-        * Example: ./stego -dec secret.mkv
+          by using the original `cloak` file as a decyprtion key
+        * Example: ./tapestry -dec secret.mkv cloak.mp4
+
 
 ### Limitations
 Since the encryption and decryption methods currently perform operations on the pixels in each videos' frame, there are
@@ -41,19 +56,22 @@ limitations regarding the dimensions of the cloak and message video files.
 
 ### Example
 Suppose you have a video called `Picklock_Tutorial.mp4` which is a DIY video containing instructions on how to picklock.
-We can hide this tutorial in another video you have, say a video of the President's recent speech, named
-`Presidential_Speech.mp4`.
+We can hide this tutorial in another video that both you and your recipient have, say a video of your favorite mountain biking trail,
+named `Mountain_Biking.mp4`.
+
+**TIP:** A cloak file with plenty of movement and colors is the best type of file to hide content in, as it makes it harder to notice slight
+differences in pixel color or movement
 
 ```sh
-./tapestry -enc Presidential_Speech.mp4 Picklock_Tutorial.mp4
+./tapestry -enc Mountain_Biking.mp4 Picklock_Tutorial.mp4
 ```
 
 You could then send `output.mkv` to a peer.
 
-Your peer could decrypt this inconspicuous video file.
+Your peer could decrypt this inconspicuous video file using the copy of the speech video they also have.
 
 ```sh
-./tapestry -dec output.mkv
+./tapestry -dec output.mkv Mountain_Biking.mp4
 ```
 
-Voila!  The peer can open `message.mp4` and watch your picklocking tutorial unencrypted.
+Voila!  The peer can open `output.mp4` and watch your picklocking tutorial unencrypted.

@@ -24,20 +24,25 @@ void rgb_to_binary(int n, char* binary);
 unsigned int binary_to_rgb(char* binary);
 video_dimension_s *video_dimensions(char* filename);
 
-void cipher(char* cloak, char* message, void(*operation)(char*, char*), int preserve_color);
+
+void cipher(char* cloak, char* message, void(*operation)(char*, char*), int preserve_color, int rounds);
 void encrypt(char* message_binary, char* cloak_binary);
 void decrypt(char* message_binary, char* cloak_binary);
+
+void prepare_message_frame(char* cloak, char** message, video_dimension_s *cloak_dim, video_dimension_s *message_dim);
+void coordinate_transformation(char *frame, video_dimension_s *dim, int rounds);
 
 void print_help();
 
 int main(int argc, char** argv) {
+    srand(0);
     if (argc < 4) {
         print_help();
         return 1;
     } else if (strcmp(argv[1], "-enc") == 0) {
-        cipher(argv[2], argv[3], encrypt, 1);
+        cipher(argv[2], argv[3], encrypt, 1, 3);
     } else if (strcmp(argv[1], "-dec") == 0) {
-        cipher(argv[2], argv[3], decrypt, 0);
+        cipher(argv[2], argv[3], decrypt, 0, -3);
     }
     return 0;
 }
@@ -193,8 +198,8 @@ void decrypt(char* message_binary, char* cloak_binary) {
  *                                  or decryption mechanism on it
  *              int preserve_color: flag which determines whether to output to a format preserving the rgb values
  */
-void cipher(char* cloak, char* message, void(*operation)(char*, char*), int preserve_color) {
-    int x, y, cloak_values, message_values, cloak_offset, message_offset;
+void cipher(char* cloak, char* message, void(*operation)(char*, char*), int preserve_color, int rounds) {
+    int x, y, cloak_values, message_values, cloak_offset;
     char *cloak_frame, *message_frame;
     char *command;
     // create room for two 8-bit binary strings to hold an integer
@@ -270,30 +275,38 @@ void cipher(char* cloak, char* message, void(*operation)(char*, char*), int pres
         // If the number of rgb values isn't equal to the amount in a frame, then there aren't any more frames to process
         if (cloak_values != cloak_dimensions->height*cloak_dimensions->width*3) break;
 
-        // If there is still a frame of the message to hide, we need to hide it in the cloak.
-        if (message_values == message_dimensions->height*message_dimensions->width*3) {
-            // Process the frame of message to embed it
-            for (y = 0; y < message_dimensions->height; ++y) {
-                for (x = 0; x < message_dimensions->width; ++x) {
-                    // get the location of the pixel in the cloak and the message
-                    cloak_offset = (y * cloak_dimensions->width * 3) + (x * 3);
-                    message_offset = (y * message_dimensions->width * 3) + (x * 3);
+        // fill out the frame for the message
+        prepare_message_frame(cloak_frame, &message_frame, cloak_dimensions, message_dimensions);
 
-                    // for the red, green, and blue elements of the pixel
-                    for (int color = 0; color < 3; ++color) {
-                        /* get the current [0-255] ranged value in binary for the pixel location
-                         * in the cloak and the message
-                         */
-                        rgb_to_binary(cloak_frame[cloak_offset + color], cloak_binary);
-                        rgb_to_binary(message_frame[message_offset + color], message_binary);
+        if (rounds > 0) {
+            coordinate_transformation(message_frame, cloak_dimensions, rounds);
+        }
 
-                        operation(message_binary, cloak_binary);
+        // Process the frame of message to embed it
+        for (y = 0; y < cloak_dimensions->height; ++y) {
+            for (x = 0; x < cloak_dimensions->width; ++x) {
+                // get the location of the pixel in the cloak and the message
+                cloak_offset = (y * cloak_dimensions->width * 3) + (x * 3);
 
-                        // convert the composed binary value back to a [0-255] ranged rgb value
-                        cloak_frame[cloak_offset + color] = (char)binary_to_rgb(cloak_binary);
-                    }
+                // for the red, green, and blue elements of the pixel
+                for (int color = 0; color < 3; ++color) {
+                    /* get the current [0-255] ranged value in binary for the pixel location
+                     * in the cloak and the message
+                     */
+                    rgb_to_binary(cloak_frame[cloak_offset + color], cloak_binary);
+                    rgb_to_binary(message_frame[cloak_offset + color], message_binary);
+
+                    operation(message_binary, cloak_binary);
+
+                    // convert the composed binary value back to a [0-255] ranged rgb value
+                    cloak_frame[cloak_offset + color] = (char) binary_to_rgb(cloak_binary);
                 }
             }
+        }
+
+        if (rounds < 0) {
+            // transform after XOR, in the event of decryption
+            coordinate_transformation(cloak_frame, cloak_dimensions, rounds);
         }
 
         // Write this cloak_frame to the output pipe
@@ -325,4 +338,110 @@ void cipher(char* cloak, char* message, void(*operation)(char*, char*), int pres
     free(message_dimensions);
     free(cloak_frame);
     free(message_frame);
+}
+
+void prepare_message_frame(char* cloak, char** message, video_dimension_s *cloak_dim, video_dimension_s *message_dim) {
+    int cloak_offset, message_offset, x, y;
+    char *temp_frame = malloc(sizeof(char) * cloak_dim->height * cloak_dim->width * 3);
+
+    char filler_pixel[3];
+    int group_size = 0;
+    for (y = 0; y < cloak_dim->height; ++y) {
+        for (x = 0; x < cloak_dim->width; ++x) {
+            cloak_offset = (y * cloak_dim->width * 3) + (x * 3);
+            message_offset = (y * message_dim->width * 3) + (x * 3);
+            if (x < message_dim->width && y < message_dim->height) {
+                for (int color = 0; color < 3; ++color) {
+                    temp_frame[cloak_offset + color] = (*message)[message_offset + color];
+                }
+            } else {
+                // fill out values
+                if (group_size <= 0) {
+                    group_size = (rand() % 300) + 1;
+                    int offset = (rand() % 4);
+                    offset += (((cloak_dim->width * 3) / 2) * (offset % 2)) + ((offset/2) * (cloak_dim->width * 3));
+                    for (int color = 0; color < 3; ++color) {
+                        filler_pixel[color] = (*message)[offset + color];
+                    }
+                }
+
+                for (int color = 0; color < 3; ++color) {
+                    temp_frame[cloak_offset + color] = filler_pixel[color];
+                }
+                --group_size;
+            }
+        }
+    }
+    *message = realloc(*message, sizeof(char) * cloak_dim->height * cloak_dim->width * 3);
+    memcpy(*message, temp_frame, sizeof(char) * cloak_dim->height * cloak_dim->width * 3);
+    free(temp_frame);
+
+}
+
+void horizontal_transformation(char *frame, video_dimension_s *dim) {
+    char *temp_frame = malloc(sizeof(char) * dim->height * dim->width * 3);
+    memcpy(temp_frame, frame, sizeof(char) * dim->height * dim->width * 3);
+    int offset, x, y;
+
+    for (y = 0; y < dim->height; ++y) {
+        for (x = 0; x < dim->width; ++x) {
+            offset = (y * dim->width * 3);
+            for (int color = 0; color < 3; ++color) {
+                temp_frame[offset + ( dim->width * 3 ) - (( x+1 ) * 3) + color] = frame[offset + (x * 3) +color];
+            }
+        }
+    }
+    memcpy(frame, temp_frame, sizeof(char) * dim->height * dim->width * 3);
+    free(temp_frame);
+}
+
+void coordinate_transformation(char *frame, video_dimension_s *dim, int rounds) {
+    char *temp_frame = malloc(sizeof(char) * dim->height * dim->width * 3);
+    memcpy(temp_frame, frame, sizeof(char) * dim->height * dim->width * 3);
+
+    int translation_modifier = rounds < 0 ? -1 : 1;
+    rounds *= translation_modifier;
+
+    int x, y;
+    int coordinate[2][2] = {{0, 3}, {1, 2}};
+    int transformation[4][2] = {{1, 0},  {0, 1}, {-1, 0}, {0, -1}};
+
+    for (y = 0; y < dim->height; ++y) {
+        for (x = 0; x < dim->width; ++x) {
+
+            int location_x, location_y, offset_x, offset_y;
+            offset_x = offset_y = 0;
+
+            location_x = x;
+            location_y = y;
+
+            int width_translation = dim->width;
+            int height_translation = dim->height;
+            for (int r = 0; r < rounds; ++r) {
+                width_translation /= 2;
+                height_translation /= 2;
+
+                int quadrant = coordinate[x >= offset_x + width_translation][y >= offset_y + height_translation];
+                if (translation_modifier < 0) {
+                    quadrant = (quadrant + 1) % 4;
+                }
+
+                location_x += transformation[quadrant][0] * width_translation;
+                location_y += transformation[quadrant][1] * height_translation;
+
+                offset_x += (x >= offset_x + width_translation) * width_translation;
+                offset_y += (y >= offset_y + height_translation) * height_translation;
+            }
+
+            int rgb_offset = (y * dim->width * 3) + (x * 3);
+            int transformed_offset = (location_y * dim->width * 3) + (location_x * 3);
+
+            for (int color = 0; color < 3; ++color) {
+                temp_frame[transformed_offset + color] = frame[rgb_offset + color];
+            }
+        }
+    }
+
+    memcpy(frame, temp_frame, sizeof(char) * dim->height * dim->width * 3);
+    free(temp_frame);
 }

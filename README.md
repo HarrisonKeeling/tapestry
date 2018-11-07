@@ -17,6 +17,10 @@ which will allow you to preserve the entire quality of the message at
 the limitation of having a cloak file with twice as many frames than
 the message file.
 
+I've begun adding noise distribution and optional cartesian distribution,
+you can take a look on the [`add-noise-distribution`](https://github.com/HarrisonKeeling/tapestry/tree/add-noise-distribution)
+branch.
+
 ## Requirements
 Tapestry is written in C and uses [FFmpeg](https://ffmpeg.org/) to encode and decode video files.
 
